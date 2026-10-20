@@ -257,13 +257,13 @@ The interactive demo (`src/App.tsx` and `src/components/`) is structured around 
 
 1. **External store synchronization (`src/hooks/useStores.ts`)**: `SelectionEngine` and `MockServer` are plain TypeScript classes outside React state, bridged to React 19 via `useSyncExternalStore` (`useEngineVersion` and `useServerLog`).
 2. **Virtualized grid with pin-aware LRU page cache (`src/components/ItemGrid.tsx`)**:
-* `computeGridRange(scrollTop, viewportH, totalSize, pageSize)` clamps both `first` and `last` row indices to `maxRow = Math.max(0, totalSize - 1)`, preventing out-of-bounds page offset requests when `totalSize` shrinks while scrolled down.
+* `computeGridRange(scrollTop, viewportH, totalSize, pageSize)` returns `{ first: 0, last: -1, firstPage: 0, lastPage: 0 }` when `totalSize <= 0`, rendering 0 DOM rows on empty views without ghost skeleton rows. For `totalSize > 0`, it clamps both `first` and `last` row indices to `maxRow = totalSize - 1`, preventing out-of-bounds page offset requests when `totalSize` shrinks while scrolled down.
 * `ItemGrid` caches at most `PAGE_CACHE_CAP = 5` pages in memory. Cache hits promote the page to the MRU position; cache misses evict only the least-recently-used pages outside the currently visible `[firstPage, lastPage]` window.
 * `ItemGrid` is keyed on ``${view}:${pageSize}`` and guards in-flight fetches with an incrementing `epoch` ref so cross-view or cross-dataset responses are ignored.
 
 
 3. **Version-gated count reconciliation (`src/App.tsx`)**: Debounced `page_size=0` count queries capture `const v = engine.version` before firing and pass `v` to `engine.reconcile(results, v)`, ensuring slow network responses never overwrite newer user mutations.
-4. **Monotonic token cancellation in `ScenarioRunner` (`src/components/ScenarioRunner.tsx`)**: Scripted async walkthroughs capture `const myRunId = ++runSeq.current` on start and increment `runSeq.current` on manual abort, engine swap, or unmount cleanup. All async continuations (`waitFresh`, `sleep`, `fetchItems`, `log`, and `finally`) check `runSeq.current === myRunId`, preventing zombie coroutines from mutating state across dataset or `knownCap` changes.
+4. **Monotonic token cancellation in `ScenarioRunner` (`src/components/ScenarioRunner.tsx`)**: Scripted async walkthroughs capture `const myRunId = ++runSeq.current` on start. A synchronous ref (`runningRef`) guards against rapid concurrent click races. Manual abort sets `abort.current = true;` without incrementing `runSeq.current`, enabling the active scenario to cleanly complete its `finally` block, clear `running`, and log cancellation. Engine swap and unmount cleanup increment `runSeq.current` and clear `running` and `runningRef`, immediately invalidating all in-flight coroutines. All async continuations (`waitFresh`, `sleep`, `fetchItems`, `log`, and `finally`) check `runSeq.current === myRunId`, preventing zombie coroutines from mutating state across dataset or `knownCap` changes.
 
 ---
 
@@ -276,7 +276,7 @@ The interactive demo (`src/App.tsx` and `src/components/`) is structured around 
 ├── vite.config.ts
 ├── scripts/
 │   ├── check.ts               # CLI property test suite (72 runs across 3 dataset shapes, 34,200 steps)
-│   ├── regressions.ts         # 23 deterministic regression tests for engine, compiler, parser, and UI math
+│   ├── regressions.ts         # 25 deterministic regression tests for engine, compiler, parser, and UI math
 │   └── walkthrough.ts         # CLI trace of the 5 core selection & consolidation scenarios
 └── src/
     ├── App.tsx                # Top-level workbench layout, bootstrap, debounced reconciliation, live oracle
@@ -331,7 +331,7 @@ The repository includes a headless verification pipeline powered by TypeScript, 
 # 1. Typecheck all source, script, and config files (tsc --noEmit)
 npm run typecheck
 
-# 2. Run the 23 deterministic regression tests (compiler, normalization, staleness, parser, grid bounds)
+# 2. Run the 25 deterministic regression tests (compiler, normalization, staleness, parser, grid bounds)
 npm run regressions
 
 # 3. Run the 72-configuration randomized property test suite

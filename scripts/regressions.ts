@@ -622,8 +622,25 @@ check('ItemGrid row range calculation clamps first to maxRow when totalSize shri
 });
 
 // ---------------------------------------------------------------------------
-// Review 07 BLOCKING — ScenarioRunner aborting an active scenario must reset
-// `running` to null in `finally` and not brick the runner.
+// Review 09 #4 / Review 10 #1 — computeGridRange must return last = -1 when
+// totalSize <= 0 so ItemGrid renders 0 DOM rows on empty views instead of a
+// permanent "row 1 · fetching…" skeleton row.
+// ---------------------------------------------------------------------------
+check('computeGridRange returns empty range (last = -1) when totalSize is 0 or negative', () => {
+  const zero = computeGridRange(0, 600, 0, 20);
+  equal(zero.first, 0, 'first row must be 0 for totalSize=0');
+  equal(zero.last, -1, 'last row must be -1 for totalSize=0 so 0 rows are rendered');
+  equal(zero.firstPage, 0, 'firstPage must be 0 for totalSize=0');
+  equal(zero.lastPage, 0, 'lastPage must be 0 for totalSize=0');
+
+  const neg = computeGridRange(100, 600, -5, 20);
+  equal(neg.last, -1, 'last row must be -1 for negative totalSize');
+});
+
+// ---------------------------------------------------------------------------
+// Review 07 BLOCKING / Review 09 #5 / Review 10 #2 — ScenarioRunner manual abort
+// resets running to null via deterministic barrier, and runningRef provides
+// synchronous mutual exclusion against rapid concurrent scenario clicks.
 // ---------------------------------------------------------------------------
 await checkAsync('ScenarioRunner manual abort resets running state to null', async () => {
   let running: string | null = null;
@@ -631,38 +648,58 @@ await checkAsync('ScenarioRunner manual abort resets running state to null', asy
   const abort = { current: false };
   const mounted = { current: true };
   const runSeq = { current: 0 };
+  const runningRef = { current: null as string | null };
+
+  let signalActive!: () => void;
+  const activePromise = new Promise<void>((resolve) => {
+    signalActive = resolve;
+  });
 
   const run = async (s: { id: string }) => {
-    if (running) {
-      abort.current = true;
+    if (runningRef.current) {
+      if (runningRef.current === s.id) {
+        abort.current = true;
+      }
       return;
     }
     abort.current = false;
     const myRunId = ++runSeq.current;
+    runningRef.current = s.id;
     running = s.id;
     lines.push(`▶ ${s.id}`);
     const log = (msg: string) => {
       if (mounted.current && runSeq.current === myRunId) lines.push(msg);
     };
     try {
+      signalActive();
       while (!abort.current && runSeq.current === myRunId) {
-        await new Promise((r) => setTimeout(r, 20));
-        break;
+        await new Promise((r) => setTimeout(r, 10));
       }
       if (runSeq.current === myRunId) {
         log(abort.current ? '■ aborted' : '■ done');
       }
     } finally {
-      if (mounted.current && runSeq.current === myRunId) running = null;
+      if (mounted.current && runSeq.current === myRunId) {
+        runningRef.current = null;
+        running = null;
+      }
     }
   };
 
   const p = run({ id: 'sc1' });
-  await new Promise((r) => setTimeout(r, 5));
-  await run({ id: 'sc1' }); // click to abort
+  await activePromise;
+
+  // Concurrent call to another scenario while sc1 is running — must be ignored synchronously
+  await run({ id: 'sc2' });
+  equal(runningRef.current, 'sc1', 'runningRef must remain sc1');
+  assert(!lines.includes('▶ sc2'), 'sc2 must not start while sc1 is running');
+
+  // Manual abort of sc1
+  await run({ id: 'sc1' });
   await p;
 
   equal(running, null, 'running state must be cleared after abort');
+  equal(runningRef.current, null, 'runningRef must be cleared after abort');
   assert(lines.includes('■ aborted'), 'lines must include abort confirmation');
 });
 

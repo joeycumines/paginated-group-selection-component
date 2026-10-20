@@ -148,10 +148,7 @@ export function normalizeEncoding(enc: Encoding, groupIds: GroupId[], nonZeroBuc
     (!checkUngrouped || g0 !== null) &&
     groupIds.filter(checkGroup).every((g) => rest.some((r) => r.group === g));
   if (fullCoverage) {
-    const candidates = new Set<boolean>();
-    if (g0) candidates.add(g0.op === 'INCLUDE');
-    if (rest.length) candidates.add(rest[0].op === 'INCLUDE');
-    if (candidates.size === 0) candidates.add(enc.base);
+    const candidates = [enc.base, !enc.base];
     let best: { base: boolean; list: Rule[]; bytes: number } | null = null;
     for (const base of candidates) {
       const list = placeUngrouped(pruneHead(rest, base), g0, base, enc.exceptions);
@@ -528,13 +525,14 @@ export class SelectionEngine {
    * Then canonicalise ℒ against β. Terminates because bytes strictly decrease.
    */
   consolidate() {
-    normalizeEncoding(this.enc, this.groupIds, this.nonZeroBuckets);
+    const nonZero = this.nonZeroBuckets;
+    normalizeEncoding(this.enc, this.groupIds, nonZero);
     this.sweepRedundant();
     for (let iter = 0; iter < 4 * (this.groupIds.length + 2); iter++) {
       const cur = compileEncoding(this.enc).bytes;
       let best: { enc: Encoding; bytes: number; label: string } | null = null;
       const consider = (enc: Encoding, label: string) => {
-        normalizeEncoding(enc, this.groupIds, this.nonZeroBuckets);
+        normalizeEncoding(enc, this.groupIds, nonZero);
         sweepEncoding(enc);
         const bytes = compileEncoding(enc).bytes;
         if (!best || bytes < best.bytes) best = { enc, bytes, label };

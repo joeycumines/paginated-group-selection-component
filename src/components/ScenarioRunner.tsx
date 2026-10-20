@@ -196,6 +196,7 @@ export function ScenarioRunner({
   pageSize: number;
 }) {
   const [running, setRunning] = useState<string | null>(null);
+  const runningRef = useRef<string | null>(null);
   const [lines, setLines] = useState<LogLine[]>([]);
   const abort = useRef(false);
   const mounted = useRef(true);
@@ -212,6 +213,7 @@ export function ScenarioRunner({
       mounted.current = false;
       abort.current = true;
       runSeq.current++;
+      runningRef.current = null;
       setRunning(null);
       if (ptTimer.current !== null) {
         clearTimeout(ptTimer.current);
@@ -222,12 +224,15 @@ export function ScenarioRunner({
   }, [engine]);
 
   const run = async (s: Scenario) => {
-    if (running) {
-      abort.current = true;
+    if (runningRef.current) {
+      if (runningRef.current === s.id) {
+        abort.current = true;
+      }
       return;
     }
     abort.current = false;
     const myRunId = ++runSeq.current;
+    runningRef.current = s.id;
     setRunning(s.id);
     setLines([{ kind: 'step', msg: `▶ ${s.title}` }]);
     const log = (msg: string, kind: LogKind = 'info') => {
@@ -263,7 +268,10 @@ export function ScenarioRunner({
         log(`error: ${(e as Error).message}`, 'warn');
       }
     } finally {
-      if (mounted.current && runSeq.current === myRunId) setRunning(null);
+      if (mounted.current && runSeq.current === myRunId) {
+        runningRef.current = null;
+        setRunning(null);
+      }
     }
   };
 

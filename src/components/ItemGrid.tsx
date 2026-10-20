@@ -18,7 +18,10 @@ export function computeGridRange(
   rowH: number = ROW_H,
   overscan: number = OVERSCAN,
 ): { first: number; last: number; firstPage: number; lastPage: number } {
-  const maxRow = Math.max(0, totalSize - 1);
+  if (totalSize <= 0) {
+    return { first: 0, last: -1, firstPage: 0, lastPage: 0 };
+  }
+  const maxRow = totalSize - 1;
   const first = Math.min(maxRow, Math.max(0, Math.floor(scrollTop / rowH) - overscan));
   const last = Math.min(maxRow, Math.ceil((scrollTop + viewportH) / rowH) + overscan);
   const firstPage = Math.floor(first / pageSize);
