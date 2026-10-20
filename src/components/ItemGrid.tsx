@@ -10,6 +10,22 @@ const ROW_H = 38;
 const OVERSCAN = 4;
 const PAGE_CACHE_CAP = 5;
 
+export function computeGridRange(
+  scrollTop: number,
+  viewportH: number,
+  totalSize: number,
+  pageSize: number,
+  rowH: number = ROW_H,
+  overscan: number = OVERSCAN,
+): { first: number; last: number; firstPage: number; lastPage: number } {
+  const maxRow = Math.max(0, totalSize - 1);
+  const first = Math.min(maxRow, Math.max(0, Math.floor(scrollTop / rowH) - overscan));
+  const last = Math.min(maxRow, Math.ceil((scrollTop + viewportH) / rowH) + overscan);
+  const firstPage = Math.floor(first / pageSize);
+  const lastPage = Math.max(firstPage, Math.floor(Math.max(last, 0) / pageSize));
+  return { first, last, firstPage, lastPage };
+}
+
 export function ItemGrid({
   engine,
   server,
@@ -63,10 +79,7 @@ export function ItemGrid({
     return () => ro.disconnect();
   }, []);
 
-  const first = Math.max(0, Math.floor(scrollTop / ROW_H) - OVERSCAN);
-  const last = Math.min(totalSize - 1, Math.ceil((scrollTop + viewportH) / ROW_H) + OVERSCAN);
-  const firstPage = Math.floor(first / pageSize);
-  const lastPage = Math.max(firstPage, Math.floor(Math.max(last, 0) / pageSize));
+  const { first, last, firstPage, lastPage } = computeGridRange(scrollTop, viewportH, totalSize, pageSize);
   visibleRange.current = [firstPage, lastPage];
 
   const fetchPage = useCallback(

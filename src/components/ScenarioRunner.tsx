@@ -199,6 +199,7 @@ export function ScenarioRunner({
   const [lines, setLines] = useState<LogLine[]>([]);
   const abort = useRef(false);
   const mounted = useRef(true);
+  const runSeq = useRef(0);
   const ptTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [pt, setPt] = useState<PropertyTestResult | null>(null);
   const [ptRunning, setPtRunning] = useState(false);
@@ -210,9 +211,12 @@ export function ScenarioRunner({
     return () => {
       mounted.current = false;
       abort.current = true;
+      runSeq.current++;
+      setRunning(null);
       if (ptTimer.current !== null) {
         clearTimeout(ptTimer.current);
         ptTimer.current = null;
+        setPtRunning(false);
       }
     };
   }, [engine]);
@@ -223,10 +227,11 @@ export function ScenarioRunner({
       return;
     }
     abort.current = false;
+    const myRunId = ++runSeq.current;
     setRunning(s.id);
     setLines([{ kind: 'step', msg: `▶ ${s.title}` }]);
     const log = (msg: string, kind: LogKind = 'info') => {
-      if (mounted.current) setLines((l) => [...l, { kind, msg }]);
+      if (mounted.current && runSeq.current === myRunId) setLines((l) => [...l, { kind, msg }]);
     };
     const ctx: ScenarioCtx = {
       engine,
@@ -235,13 +240,13 @@ export function ScenarioRunner({
       setView,
       log,
       sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
-      aborted: () => abort.current,
+      aborted: () => abort.current || runSeq.current !== myRunId,
       waitFresh: async () => {
         const t0 = Date.now();
-        while (engine.staleBuckets().length && Date.now() - t0 < 8000 && !abort.current) {
+        while (engine.staleBuckets().length && Date.now() - t0 < 8000 && !abort.current && runSeq.current === myRunId) {
           await new Promise((r) => setTimeout(r, 60));
         }
-        if (!abort.current && engine.staleBuckets().length) {
+        if (!abort.current && runSeq.current === myRunId && engine.staleBuckets().length) {
           throw new Error('reconciliation timed out with stale buckets: ' + engine.staleBuckets().join(', '));
         }
       },
@@ -250,11 +255,15 @@ export function ScenarioRunner({
     };
     try {
       await s.run(ctx);
-      log(abort.current ? '■ aborted' : '■ done', abort.current ? 'warn' : 'ok');
+      if (runSeq.current === myRunId) {
+        log(abort.current ? '■ aborted' : '■ done', abort.current ? 'warn' : 'ok');
+      }
     } catch (e) {
-      log(`error: ${(e as Error).message}`, 'warn');
+      if (runSeq.current === myRunId) {
+        log(`error: ${(e as Error).message}`, 'warn');
+      }
     } finally {
-      if (mounted.current) setRunning(null);
+      if (mounted.current && runSeq.current === myRunId) setRunning(null);
     }
   };
 
@@ -263,8 +272,10 @@ export function ScenarioRunner({
     ptTimer.current = setTimeout(() => {
       const res = runPropertyTest(server.items, server.groups, { steps: 400, seed: Date.now() % 100000, knownCap, pageSize, reconcileProbability: 0.5 });
       ptTimer.current = null;
-      setPt(res);
-      setPtRunning(false);
+      if (mounted.current) {
+        setPt(res);
+        setPtRunning(false);
+      }
     }, 20);
   };
 

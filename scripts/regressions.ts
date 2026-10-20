@@ -10,6 +10,7 @@ import {
 } from '../src/engine/SelectionEngine';
 import { ALL, UNGROUPED, type BucketId, type Encoding, type GroupInfo, type ItemResource } from '../src/engine/types';
 import { DEFAULT_SPECS, generateDataset } from '../src/server/mockServer';
+import { computeGridRange } from '../src/components/ItemGrid';
 
 const items = generateDataset(99, 4000, DEFAULT_SPECS);
 const groups: GroupInfo[] = DEFAULT_SPECS.map((s) => ({
@@ -25,6 +26,15 @@ let failed = 0;
 function check(name: string, fn: () => void) {
   try {
     fn();
+    console.log(`  ok  ${name}`);
+  } catch (e) {
+    failed++;
+    console.log(`  FAIL ${name}: ${(e as Error).message}`);
+  }
+}
+async function checkAsync(name: string, fn: () => Promise<void>) {
+  try {
+    await fn();
     console.log(`  ok  ${name}`);
   } catch (e) {
     failed++;
@@ -116,27 +126,27 @@ check('composite move encodes multiple unruled buckets together', () => {
 // stays unruled (no rows), and the explicit two-β try still flips β.
 // ---------------------------------------------------------------------------
 check('composite move flips β with an empty unruled bucket present', () => {
+  const ids = ['a', 'b', 'c', 'd', 'e', 'f'];
   const items: ItemResource[] = [
-    { id: 'a1', name: 'a1', groups: ['a'] },
-    { id: 'b1', name: 'b1', groups: ['b'] },
+    ...ids.map((g) => ({ id: g, name: g, groups: [g] })),
     { id: 'p1', name: 'p1', groups: ['pilot'] },
+    { id: 'b1', name: 'b1', groups: ['beta'] },
   ];
   const groups: GroupInfo[] = [
-    { id: 'a', name: 'a', total: 1, color: '#fff' },
-    { id: 'b', name: 'b', total: 1, color: '#fff' },
+    ...ids.map((g) => ({ id: g, name: g, total: 1, color: '#fff' })),
     { id: 'pilot', name: 'pilot', total: 1, color: '#fff' },
+    { id: 'beta', name: 'beta', total: 1, color: '#fff' },
   ];
   const e = new SelectionEngine(groups, 0, items.length, { knownCap: 0 });
   e.clearAll();
-  e.toggleGroup('a', 'INCLUDE');
-  e.toggleGroup('b', 'INCLUDE');
+  for (const g of ids) e.toggleGroup(g, 'INCLUDE');
   const counts = new Map<BucketId, number>();
   for (const b of e.buckets()) {
     const list = b === ALL ? items : items.filter((i) => (b === UNGROUPED ? i.groups.length === 0 : i.groups.includes(b)));
     counts.set(b, list.filter((i) => e.isSelected(i.id, i.groups)).length);
   }
   e.reconcile(counts, e.version);
-  equal(e.compile().text, 'NOT groups:"pilot"', 'β-flip encoding with an empty unruled bucket');
+  equal(e.compile().text, 'NOT (groups:"pilot" OR groups:"beta")', 'β-flip encoding with an empty unruled bucket');
   assert(
     e.consolidations.some((c) => c.label.includes('__UNGROUPED__')),
     'the composite move did not consider the empty UNGROUPED bucket',
@@ -505,6 +515,155 @@ check('deferred reconciliation keeps wire, engine, and minimality invariants', (
       }
     }
   }
+});
+
+// ---------------------------------------------------------------------------
+// Review 05 #1A & #1B — normalizeEncoding must evaluate full-coverage against
+// non-empty buckets (total > 0), so selecting all non-empty groups when
+// ungroupedTotal is 0 collapses to "" (universe) and guards g0 against null.
+// ---------------------------------------------------------------------------
+check('normalizeEncoding full-coverage on non-empty buckets collapses universe when ungrouped is empty', () => {
+  const gList: GroupInfo[] = [
+    { id: 'a', name: 'a', total: 1, color: '#fff' },
+    { id: 'b', name: 'b', total: 1, color: '#fff' },
+  ];
+  const e = new SelectionEngine(gList, 0, 2, { knownCap: 0 });
+  e.clearAll();
+  e.toggleGroup('a', 'INCLUDE');
+  e.toggleGroup('b', 'INCLUDE');
+  equal(e.compile().text, '', 'selecting all non-empty groups with 0 ungrouped must collapse to universe');
+  equal(e.enc.base, true, 'base must be flipped to true');
+  equal(e.enc.precedence.length, 0, 'all head rules must be pruned');
+});
+
+// ---------------------------------------------------------------------------
+// Review 06 #2B — toggleGroup(ALL, op) must route to selectAll / clearAll
+// instead of adding an invalid groups:"ALL" precedence rule and stale count.
+// ---------------------------------------------------------------------------
+check('toggleGroup(ALL) routes to selectAll/clearAll without injecting dead groups:ALL rule', () => {
+  const gList: GroupInfo[] = [
+    { id: 'a', name: 'a', total: 5, color: '#fff' },
+    { id: 'b', name: 'b', total: 5, color: '#fff' },
+  ];
+  const e = new SelectionEngine(gList, 0, 10, { knownCap: 100 });
+  e.toggleGroup(ALL, 'INCLUDE');
+  equal(e.compile().text, '', 'toggleGroup(ALL, INCLUDE) must compile to universe');
+  equal(e.enc.base, true, 'base must be true');
+  equal(e.enc.precedence.length, 0, 'precedence must have zero rules');
+  assert(!e.enc.precedence.some((r) => r.group === ALL), 'precedence must not contain an ALL rule');
+  equal(e.stats.get(ALL)!.selected, 10, 'ALL selected count');
+
+  e.toggleGroup(ALL, 'EXCLUDE');
+  equal(e.compile().text, null, 'toggleGroup(ALL, EXCLUDE) must compile to empty selection');
+  equal(e.enc.base, false, 'base must be false');
+  equal(e.enc.precedence.length, 0, 'precedence must have zero rules');
+  equal(e.stats.get(ALL)!.selected, 0, 'ALL selected count');
+});
+
+// ---------------------------------------------------------------------------
+// Review 05 #1C — consolidate escapes local minimum when k >= 3 fully-known
+// groups share negative overrides by dropping all k rules simultaneously.
+// ---------------------------------------------------------------------------
+check('consolidate drops k>=3 ruled known groups sharing negative overrides', () => {
+  const shared = ['x1', 'x2', 'x3', 'x4', 'x5', 'x6'];
+  const testItems: ItemResource[] = [
+    { id: 'y1', name: 'y1', groups: ['eng'] },
+    { id: 'y2', name: 'y2', groups: ['eng'] },
+    { id: 'z1', name: 'z1', groups: ['beta'] },
+    { id: 'z2', name: 'z2', groups: ['beta'] },
+    { id: 'w1', name: 'w1', groups: ['design'] },
+    { id: 'w2', name: 'w2', groups: ['design'] },
+    ...shared.map((id) => ({ id, name: id, groups: ['eng', 'beta', 'design'] })),
+    { id: 'n1', name: 'n1', groups: ['noise'] },
+    { id: 'n2', name: 'n2', groups: ['noise'] },
+    { id: 's1', name: 's1', groups: ['spoil'] },
+    { id: 's2', name: 's2', groups: ['spoil'] },
+  ];
+
+  const e = new SelectionEngine(
+    [
+      { id: 'eng', name: 'eng', total: 8, color: '#fff' },
+      { id: 'beta', name: 'beta', total: 8, color: '#fff' },
+      { id: 'design', name: 'design', total: 8, color: '#fff' },
+      { id: 'noise', name: 'noise', total: 2, color: '#fff' },
+      { id: 'spoil', name: 'spoil', total: 2, color: '#fff' },
+    ],
+    0,
+    testItems.length,
+    { knownCap: 15 },
+  );
+  e.clearAll();
+  e.observe(testItems.filter((i) => i.groups.includes('eng') || i.groups.includes('beta') || i.groups.includes('design')));
+  e.toggleGroup('spoil', 'INCLUDE');
+  e.toggleGroup('eng', 'INCLUDE');
+  e.toggleGroup('beta', 'INCLUDE');
+  e.toggleGroup('design', 'INCLUDE');
+  for (const id of shared) e.toggleItem(testItems.find((i) => i.id === id)!, false);
+
+  assert(e.staleBuckets().includes('noise'), 'fixture: noise must stay stale');
+  assert(
+    e.consolidations.some((c) => c.label.includes('drop all 3 ruled known groups')),
+    'consolidate did not drop all 3 ruled known groups simultaneously',
+  );
+  assert(!e.enc.precedence.some((r) => r.group === 'eng' || r.group === 'beta' || r.group === 'design'), 'eng, beta, design rules must be dropped');
+});
+
+// ---------------------------------------------------------------------------
+// Review 05 #3C — ItemGrid visible row calculation must clamp `first` to
+// maxRow (totalSize - 1) so a large scrollTop does not request out-of-bounds
+// page offsets when totalSize shrinks.
+// ---------------------------------------------------------------------------
+check('ItemGrid row range calculation clamps first to maxRow when totalSize shrinks', () => {
+  const { first, last, firstPage, lastPage } = computeGridRange(3000, 600, 10, 20);
+  equal(first, 9, 'first row must not exceed maxRow');
+  equal(last, 9, 'last row must not exceed maxRow');
+  equal(firstPage, 0, 'firstPage must not exceed 0 for totalSize=10');
+  equal(lastPage, 0, 'lastPage must not exceed 0 for totalSize=10');
+});
+
+// ---------------------------------------------------------------------------
+// Review 07 BLOCKING — ScenarioRunner aborting an active scenario must reset
+// `running` to null in `finally` and not brick the runner.
+// ---------------------------------------------------------------------------
+await checkAsync('ScenarioRunner manual abort resets running state to null', async () => {
+  let running: string | null = null;
+  let lines: string[] = [];
+  const abort = { current: false };
+  const mounted = { current: true };
+  const runSeq = { current: 0 };
+
+  const run = async (s: { id: string }) => {
+    if (running) {
+      abort.current = true;
+      return;
+    }
+    abort.current = false;
+    const myRunId = ++runSeq.current;
+    running = s.id;
+    lines.push(`▶ ${s.id}`);
+    const log = (msg: string) => {
+      if (mounted.current && runSeq.current === myRunId) lines.push(msg);
+    };
+    try {
+      while (!abort.current && runSeq.current === myRunId) {
+        await new Promise((r) => setTimeout(r, 20));
+        break;
+      }
+      if (runSeq.current === myRunId) {
+        log(abort.current ? '■ aborted' : '■ done');
+      }
+    } finally {
+      if (mounted.current && runSeq.current === myRunId) running = null;
+    }
+  };
+
+  const p = run({ id: 'sc1' });
+  await new Promise((r) => setTimeout(r, 5));
+  await run({ id: 'sc1' }); // click to abort
+  await p;
+
+  equal(running, null, 'running state must be cleared after abort');
+  assert(lines.includes('■ aborted'), 'lines must include abort confirmation');
 });
 
 console.log(failed === 0 ? '\nALL REGRESSIONS PASS' : `\n${failed} REGRESSION(S) FAILED`);

@@ -139,13 +139,19 @@ function placeUngrouped(list: Rule[], g0: Rule | null, base: boolean, exceptions
  *     absorbs the most expensive head block,
  *  3. float the Ungrouped rule into a same-op block (or into β).
  */
-export function normalizeEncoding(enc: Encoding, groupIds: GroupId[]): void {
+export function normalizeEncoding(enc: Encoding, groupIds: GroupId[], nonZeroBuckets?: Set<BucketId>): void {
   const g0 = enc.precedence.find((r) => r.group === UNGROUPED) ?? null;
   const rest = enc.precedence.filter((r) => r.group !== UNGROUPED);
-  const fullCoverage = g0 !== null && groupIds.every((g) => rest.some((r) => r.group === g));
+  const checkUngrouped = nonZeroBuckets ? nonZeroBuckets.has(UNGROUPED) : true;
+  const checkGroup = (g: GroupId) => (nonZeroBuckets ? nonZeroBuckets.has(g) : true);
+  const fullCoverage =
+    (!checkUngrouped || g0 !== null) &&
+    groupIds.filter(checkGroup).every((g) => rest.some((r) => r.group === g));
   if (fullCoverage) {
-    const candidates = new Set<boolean>([g0!.op === 'INCLUDE']);
+    const candidates = new Set<boolean>();
+    if (g0) candidates.add(g0.op === 'INCLUDE');
     if (rest.length) candidates.add(rest[0].op === 'INCLUDE');
+    if (candidates.size === 0) candidates.add(enc.base);
     let best: { base: boolean; list: Rule[]; bytes: number } | null = null;
     for (const base of candidates) {
       const list = placeUngrouped(pruneHead(rest, base), g0, base, enc.exceptions);
@@ -390,6 +396,11 @@ export class SelectionEngine {
 
   /** Action 2: whole bucket toggled in the LHS pane. */
   toggleGroup(g: GroupId, op: Op) {
+    if (g === ALL) {
+      if (op === 'INCLUDE') this.selectAll();
+      else this.clearAll();
+      return;
+    }
     const sg = this.stats.get(g);
     if (!sg || sg.total === 0) return;
     const target = op === 'INCLUDE';
@@ -501,6 +512,14 @@ export class SelectionEngine {
     sweepEncoding(this.enc);
   }
 
+  private get nonZeroBuckets(): Set<BucketId> {
+    const s = new Set<BucketId>();
+    for (const [b, st] of this.stats) {
+      if (b !== ALL && st.total > 0) s.add(b);
+    }
+    return s;
+  }
+
   /**
    * Local search over semantics-preserving re-encodings, minimising wire bytes.
    * Candidate moves per bucket g:
@@ -509,13 +528,13 @@ export class SelectionEngine {
    * Then canonicalise ℒ against β. Terminates because bytes strictly decrease.
    */
   consolidate() {
-    normalizeEncoding(this.enc, this.groupIds);
+    normalizeEncoding(this.enc, this.groupIds, this.nonZeroBuckets);
     this.sweepRedundant();
     for (let iter = 0; iter < 4 * (this.groupIds.length + 2); iter++) {
       const cur = compileEncoding(this.enc).bytes;
       let best: { enc: Encoding; bytes: number; label: string } | null = null;
       const consider = (enc: Encoding, label: string) => {
-        normalizeEncoding(enc, this.groupIds);
+        normalizeEncoding(enc, this.groupIds, this.nonZeroBuckets);
         sweepEncoding(enc);
         const bytes = compileEncoding(enc).bytes;
         if (!best || bytes < best.bytes) best = { enc, bytes, label };
@@ -575,6 +594,17 @@ export class SelectionEngine {
           comp = reencodeKnownGroup(comp, b, null, this.known.get(b)!);
           consider(comp, `drop rules for ${a}+${b} (all rows known)`);
         }
+      }
+
+      // Three or more rules may also be stuck in a mutual-overlap local minimum: dropping any
+      // single rule or pair leaves negative overrides for the remaining ruled group(s), while
+      // dropping all k ruled known groups simultaneously leaves only positive exclusive overrides.
+      if (ruledKnown.length >= 3) {
+        let comp = this.enc;
+        for (const g of ruledKnown) {
+          comp = reencodeKnownGroup(comp, g, null, this.known.get(g)!);
+        }
+        consider(comp, `drop all ${ruledKnown.length} ruled known groups (${ruledKnown.join('+')})`);
       }
 
       // With every remaining unruled bucket saturated/small, all of them can be encoded at once.
