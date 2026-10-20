@@ -110,7 +110,7 @@ export function WirePanel({
       </div>
 
       <div>
-        <div className="mb-1 text-[10.5px] uppercase tracking-wider text-slate-500">Φ(p) block fold · ℒ coalesced into {c.blocks.length} alternating block{c.blocks.length === 1 ? '' : 's'}</div>
+        <div className="mb-1 text-[10.5px] uppercase tracking-wider text-slate-500">Φ(p) block fold · ℒ coalesced into {c.blocks.length} block{c.blocks.length === 1 ? '' : 's'}</div>
         <div className="flex flex-wrap items-center gap-1 font-mono text-[11px]">
           <span className={cn('rounded px-1.5 py-px', engine.enc.base ? 'bg-sky-500/20 text-sky-200' : 'bg-slate-800 text-slate-400')}>β = {String(engine.enc.base)}</span>
           {c.blocks.map((b, i) => (

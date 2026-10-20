@@ -24,7 +24,9 @@ export default function App() {
   const [dock, setDock] = useState<'scenarios' | 'network'>('scenarios');
 
   const server = useMemo(() => new MockServer(seed, DATASET_SIZE, DEFAULT_SPECS), [seed]);
-  server.latencyRange = [latency * 0.5, latency * 1.5];
+  useEffect(() => {
+    server.latencyRange = [latency * 0.5, latency * 1.5];
+  }, [server, latency]);
 
   // Bootstrap: one ListGroups call gives N_g for every bucket; the engine needs nothing else.
   const [engine, setEngine] = useState<SelectionEngine | null>(null);
@@ -133,7 +135,7 @@ export default function App() {
         <>
           <main className="grid min-h-0 flex-1 grid-cols-[300px_minmax(0,1fr)_400px] gap-3 p-3">
             <GroupPane engine={engine} groups={server.groups} view={view} onView={setView} oracleCounts={oracle?.counts ?? null} />
-            <ItemGrid engine={engine} server={server} groups={server.groups} view={view} pageSize={pageSize} version={version} oracleSet={oracle?.set ?? null} />
+            <ItemGrid key={`${view}:${pageSize}`} engine={engine} server={server} groups={server.groups} view={view} pageSize={pageSize} version={version} oracleSet={oracle?.set ?? null} />
             <div className="grid min-h-0 grid-rows-[minmax(0,1.15fr)_minmax(0,1fr)] gap-3">
               <WirePanel engine={engine} groups={server.groups} oracleOk={oracle ? oracle.ok : null} autoVerify={autoVerify} onAutoVerify={setAutoVerify} />
               <EnginePanel engine={engine} groups={server.groups} />

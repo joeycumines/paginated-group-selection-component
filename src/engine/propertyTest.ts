@@ -7,6 +7,8 @@ export interface PropertyTestOptions {
   seed: number;
   knownCap: number;
   pageSize: number;
+  /** Probability of reconciling stale buckets after a step; < 1 exercises the stale-count paths. */
+  reconcileProbability?: number;
   onProgress?: (done: number) => void;
 }
 
@@ -109,8 +111,9 @@ export function runPropertyTest(
       observePage();
     }
 
-    // Reconcile stale buckets exactly as the UI does, but synchronously (server == truth).
-    if (engine.staleBuckets().length) {
+    // Reconcile stale buckets exactly as the UI does, but only sometimes: the UI debounces
+    // and awaits the network, so mutations regularly run against stale counts.
+    if (engine.staleBuckets().length && rand() < (opts.reconcileProbability ?? 1)) {
       const tc = truthCounts();
       const counts = new Map<BucketId, number>();
       for (const b of engine.staleBuckets()) counts.set(b, tc.get(b)!);
@@ -160,6 +163,10 @@ export function runPropertyTest(
       const st = engine.stats.get(b)!;
       if (st.fresh && st.selected !== tc.get(b)) {
         failures.push(`step ${step}: fresh count for ${b} is ${st.selected}, truth ${tc.get(b)}`);
+        bad++;
+      }
+      if (!st.fresh && st.total > 0 && engine.bucketState(b) !== 'partial') {
+        failures.push(`step ${step}: stale bucket ${b} rendered as ${engine.bucketState(b)}, not partial`);
         bad++;
       }
     }

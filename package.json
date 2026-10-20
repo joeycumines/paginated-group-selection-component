@@ -6,7 +6,10 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "check": "mkdir -p node_modules/.cache && esbuild scripts/check.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/check.mjs && node node_modules/.cache/check.mjs",
+    "regressions": "mkdir -p node_modules/.cache && esbuild scripts/regressions.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/regressions.mjs && node node_modules/.cache/regressions.mjs"
   },
   "dependencies": {
     "clsx": "2.1.1",

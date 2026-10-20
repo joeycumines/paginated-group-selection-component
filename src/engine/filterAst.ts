@@ -70,7 +70,7 @@ export function printFilter(node: FilterNode): string {
     case 'all':
       return '';
     case 'none':
-      return '';
+      throw new Error('an empty selection has no AIP-160 filter text');
     case 'group':
       return `groups:${quote(node.group)}`;
     case 'ungrouped':

@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { SelectionEngine } from '../engine/SelectionEngine';
 import { runPropertyTest, type PropertyTestResult } from '../engine/propertyTest';
 import { UNGROUPED, type BucketId, type GroupInfo, type ItemResource } from '../engine/types';
@@ -66,6 +66,7 @@ const SCENARIOS: Scenario[] = [
       c.engine.clearAll();
       c.setView('pilot');
       const rows = await c.fetchItems('groups:"pilot"', 50, 'scenario: page Pilot cohort');
+      if (c.aborted()) return;
       c.engine.observe(rows);
       for (let i = 0; i < rows.length; i++) {
         if (c.aborted()) return;
@@ -74,28 +75,35 @@ const SCENARIOS: Scenario[] = [
         c.showFilter();
         await c.sleep(380);
       }
+      if (c.aborted()) return;
       c.log(`Done: ${rows.length} individual clicks ⇒ ${c.engine.enc.exceptions.size} overrides, ${c.engine.compile().bytes} wire bytes.`, 'ok');
     },
   },
   {
     id: 'flip',
     title: '3 · >50 % polarity flip ("just these" → "all except these")',
-    blurb: 'Beta testers has 15 rows, all cached once paged (N ≤ knownCap). Selecting rows one by one flips the encoding when exclusion becomes cheaper, then shrinks to 0 IDs.',
+    blurb: 'Beta testers has 15 rows. When knownCap ≥ 15 they are all cached once paged; selecting rows one by one can then flip the encoding when exclusion becomes cheaper and shrink it to 0 IDs.',
     async run(c) {
       c.engine.clearAll();
       c.setView('beta');
       const rows = await c.fetchItems('groups:"beta"', 50, 'scenario: page Beta testers');
+      if (c.aborted()) return;
       c.engine.observe(rows);
-      c.log(`Group fully known: ${c.engine.isFullyKnown('beta')} (${rows.length} IDs cached).`, 'info');
+      const cached = c.engine.known.get('beta')?.size ?? 0;
+      c.log(`Group fully known: ${c.engine.isFullyKnown('beta')} (${cached}/${rows.length} IDs cached).`, 'info');
       for (let i = 0; i < rows.length; i++) {
         if (c.aborted()) return;
         const before = c.engine.compile();
         c.engine.toggleItem(rows[i], true);
         const after = c.engine.compile();
-        const flipped = before.tokens.groups === 0 && after.tokens.groups > 0;
+        const flipped = c.engine.isFullyKnown('beta') && before.tokens.groups === 0 && after.tokens.groups > 0;
         c.log(`click ${i + 1}/${rows.length}: ${after.tokens.ids} id literal(s), ${after.tokens.groups} group literal(s), ${after.bytes} B${flipped ? '  ⇐ FLIPPED: exclusion encoding now cheaper' : ''}`, flipped ? 'ok' : 'info');
         if (flipped || i === rows.length - 1 || i < 2) c.showFilter();
         await c.sleep(flipped ? 900 : 300);
+      }
+      if (c.aborted()) return;
+      if (!c.engine.isFullyKnown('beta')) {
+        c.log('knownCap < 15: rows were not cacheable, so saturation can only collapse to an INCLUDE rule — no polarity flip.', 'warn');
       }
     },
   },
@@ -111,6 +119,7 @@ const SCENARIOS: Scenario[] = [
         c.log(`+${g.id}: ℒ has ${c.engine.enc.precedence.length} rule(s), β=${c.engine.enc.base}`, 'info');
         await c.sleep(250);
       }
+      if (c.aborted()) return;
       c.showFilter();
       c.log('All K groups included ⇒ Ungrouped (0/N, disjoint, fresh) collapses to EXCLUDE; full coverage lets β absorb the INCLUDE block ⇒ groups:*', 'ok');
       await c.waitFresh();
@@ -119,6 +128,7 @@ const SCENARIOS: Scenario[] = [
       c.showFilter();
       c.log('Ungrouped included too ⇒ β=true, ℒ=∅: empty filter (universe).', 'ok');
       await c.sleep(700);
+      if (c.aborted()) return;
       c.engine.toggleGroup('legal', 'EXCLUDE');
       c.showFilter();
       c.log('Deselect Legal ⇒ single NOT clause. Peers overlapping Legal reconcile from the server.', 'step');
@@ -140,6 +150,7 @@ const SCENARIOS: Scenario[] = [
       c.engine.selectAll();
       c.showFilter();
       await c.sleep(400);
+      if (c.aborted()) return;
       c.engine.toggleGroup('support', 'EXCLUDE');
       c.showFilter();
       await c.waitFresh();
@@ -151,6 +162,7 @@ const SCENARIOS: Scenario[] = [
         c.engine.toggleItem(r, false);
         await c.sleep(300);
       }
+      if (c.aborted()) return;
       c.showFilter();
       c.log('Two negative overrides attach as AND NOT (…).', 'info');
       const [s] = await c.fetchItems('groups:"support"', 1, 'scenario: one support row');
@@ -186,8 +198,24 @@ export function ScenarioRunner({
   const [running, setRunning] = useState<string | null>(null);
   const [lines, setLines] = useState<LogLine[]>([]);
   const abort = useRef(false);
+  const mounted = useRef(true);
+  const ptTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [pt, setPt] = useState<PropertyTestResult | null>(null);
   const [ptRunning, setPtRunning] = useState(false);
+
+  // Replacing the engine (new dataset / knownCap) or unmounting must stop all in-flight work.
+  useEffect(() => {
+    mounted.current = true;
+    abort.current = false;
+    return () => {
+      mounted.current = false;
+      abort.current = true;
+      if (ptTimer.current !== null) {
+        clearTimeout(ptTimer.current);
+        ptTimer.current = null;
+      }
+    };
+  }, [engine]);
 
   const run = async (s: Scenario) => {
     if (running) {
@@ -197,7 +225,9 @@ export function ScenarioRunner({
     abort.current = false;
     setRunning(s.id);
     setLines([{ kind: 'step', msg: `▶ ${s.title}` }]);
-    const log = (msg: string, kind: LogKind = 'info') => setLines((l) => [...l, { kind, msg }]);
+    const log = (msg: string, kind: LogKind = 'info') => {
+      if (mounted.current) setLines((l) => [...l, { kind, msg }]);
+    };
     const ctx: ScenarioCtx = {
       engine,
       server,
@@ -211,6 +241,9 @@ export function ScenarioRunner({
         while (engine.staleBuckets().length && Date.now() - t0 < 8000 && !abort.current) {
           await new Promise((r) => setTimeout(r, 60));
         }
+        if (!abort.current && engine.staleBuckets().length) {
+          throw new Error('reconciliation timed out with stale buckets: ' + engine.staleBuckets().join(', '));
+        }
       },
       fetchItems: async (filter, size, purpose) => (await server.listItems({ filter, pageSize: size, offset: 0, purpose })).items,
       showFilter: () => log(fmtFilter(engine.compile().text), 'filter'),
@@ -221,14 +254,15 @@ export function ScenarioRunner({
     } catch (e) {
       log(`error: ${(e as Error).message}`, 'warn');
     } finally {
-      setRunning(null);
+      if (mounted.current) setRunning(null);
     }
   };
 
   const runPt = () => {
     setPtRunning(true);
-    setTimeout(() => {
-      const res = runPropertyTest(server.items, server.groups, { steps: 400, seed: Date.now() % 100000, knownCap, pageSize });
+    ptTimer.current = setTimeout(() => {
+      const res = runPropertyTest(server.items, server.groups, { steps: 400, seed: Date.now() % 100000, knownCap, pageSize, reconcileProbability: 0.5 });
+      ptTimer.current = null;
       setPt(res);
       setPtRunning(false);
     }, 20);
@@ -241,10 +275,11 @@ export function ScenarioRunner({
           <button
             key={s.id}
             onClick={() => run(s)}
+            disabled={running !== null && running !== s.id}
             className={cn(
               'block w-full rounded-md border px-2.5 py-1.5 text-left transition-colors',
               running === s.id ? 'border-sky-500 bg-sky-500/10' : 'border-slate-800 bg-slate-900 hover:border-slate-600',
-              running && running !== s.id && 'opacity-50',
+              running && running !== s.id && 'cursor-not-allowed opacity-50',
             )}
           >
             <div className="flex items-center gap-2 text-[12px] font-medium text-slate-100">

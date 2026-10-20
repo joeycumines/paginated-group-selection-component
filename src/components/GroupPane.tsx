@@ -62,6 +62,7 @@ export function GroupPane({
           const knownSize = b !== ALL ? engine.known.get(b)?.size : undefined;
           const oracle = oracleCounts?.get(b);
           const mismatch = oracle !== undefined && st.fresh && oracle !== st.selected;
+          const unknown = !st.fresh;
           const pct = st.total ? (st.selected / st.total) * 100 : 0;
           const active = view === b;
           return (
@@ -121,8 +122,8 @@ export function GroupPane({
                   </div>
                   <div className="mt-1 h-1 w-full overflow-hidden rounded bg-slate-800">
                     <div
-                      className={cn('h-full rounded transition-all', !st.fresh ? 'bg-amber-400/60' : 'bg-sky-400')}
-                      style={{ width: `${pct}%` }}
+                      className={cn('h-full rounded transition-all', unknown ? 'w-full animate-pulse bg-amber-400/40' : 'bg-sky-400')}
+                      style={unknown ? undefined : { width: `${pct}%` }}
                     />
                   </div>
                 </div>

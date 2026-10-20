@@ -17,7 +17,7 @@ export type ParsedNode =
   | { kind: 'and'; children: ParsedNode[] }
   | { kind: 'or'; children: ParsedNode[] }
   | { kind: 'not'; child: ParsedNode }
-  | { kind: 'restriction'; field: string; comparator: string | null; arg: string | null }
+  | { kind: 'restriction'; field: string; comparator: string | null; arg: string | null; argQuoted?: boolean }
   | { kind: 'true' };
 
 type Tok =
@@ -78,9 +78,47 @@ function tokenize(src: string): Tok[] {
       let j = i + 1;
       let out = '';
       while (j < src.length && src[j] !== q) {
-        if (src[j] === '\\' && j + 1 < src.length) {
-          out += src[j + 1];
-          j += 2;
+        if (src[j] === '\\') {
+          const esc = src[j + 1];
+          if (esc === undefined) throw new Error(`Unterminated string at ${i}`);
+          switch (esc) {
+            case '"':
+            case "'":
+            case '\\':
+            case '/':
+              out += esc;
+              j += 2;
+              break;
+            case 'b':
+              out += '\b';
+              j += 2;
+              break;
+            case 'f':
+              out += '\f';
+              j += 2;
+              break;
+            case 'n':
+              out += '\n';
+              j += 2;
+              break;
+            case 'r':
+              out += '\r';
+              j += 2;
+              break;
+            case 't':
+              out += '\t';
+              j += 2;
+              break;
+            case 'u': {
+              const hex = src.slice(j + 2, j + 6);
+              if (!/^[0-9a-fA-F]{4}$/.test(hex)) throw new Error(`Invalid unicode escape at ${j}`);
+              out += String.fromCharCode(parseInt(hex, 16));
+              j += 6;
+              break;
+            }
+            default:
+              throw new Error(`Unknown escape \\${esc} at ${j}`);
+          }
         } else {
           out += src[j];
           j++;
@@ -93,7 +131,7 @@ function tokenize(src: string): Tok[] {
     }
     // word: identifiers, dotted members, numbers, '*'
     let j = i;
-    while (j < src.length && !/[\s()=:<>!]/.test(src[j])) j++;
+    while (j < src.length && !/[\s()=:<>!"']/.test(src[j])) j++;
     if (j === i) throw new Error(`Unexpected character '${ch}' at ${i}`);
     toks.push({ t: 'word', v: src.slice(i, j) });
     i = j;
@@ -158,7 +196,7 @@ export function parseFilter(src: string): ParsedNode {
       const cmp = (next() as { v: string }).v;
       const a = next();
       if (a.t !== 'word' && a.t !== 'string') throw new Error('Expected argument');
-      return { kind: 'restriction', field, comparator: cmp, arg: a.v };
+      return { kind: 'restriction', field, comparator: cmp, arg: a.v, argQuoted: a.t === 'string' };
     }
     return { kind: 'restriction', field, comparator: null, arg: null };
   }
@@ -180,14 +218,14 @@ export function evaluateFilter(node: ParsedNode, item: ItemResource): boolean {
     case 'not':
       return !evaluateFilter(node.child, item);
     case 'restriction': {
-      const { field, comparator, arg } = node;
+      const { field, comparator, arg, argQuoted } = node;
       if (comparator === null) throw new Error(`Bare restriction '${field}' unsupported`);
       if (field === 'groups') {
-        if (comparator === ':') return arg === '*' ? item.groups.length > 0 : item.groups.includes(arg!);
+        if (comparator === ':') return arg === '*' && !argQuoted ? item.groups.length > 0 : item.groups.includes(arg!);
         throw new Error(`Unsupported comparator ${comparator} for repeated field groups`);
       }
       if (field === 'id') {
-        if (arg === '*') return true;
+        if (arg === '*' && !argQuoted) return true;
         if (comparator === '=' || comparator === ':') return item.id === arg;
         if (comparator === '!=') return item.id !== arg;
       }

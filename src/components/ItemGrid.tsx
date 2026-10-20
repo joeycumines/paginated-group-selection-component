@@ -108,7 +108,16 @@ export function ItemGrid({
 
   useEffect(() => {
     if (totalSize === 0) return;
-    for (let p = firstPage; p <= lastPage; p++) if (!pages.has(p)) void fetchPage(p);
+    for (let p = firstPage; p <= lastPage; p++) {
+      if (!pages.has(p)) {
+        void fetchPage(p);
+        continue;
+      }
+      // A cache hit is an access: move the page to the MRU end so eviction stays LRU.
+      if (lru.current[lru.current.length - 1] !== p) {
+        lru.current = [...lru.current.filter((x) => x !== p), p];
+      }
+    }
   }, [firstPage, lastPage, pages, fetchPage, totalSize, tick]);
 
   const rows = useMemo(() => {
