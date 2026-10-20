@@ -1,5 +1,7 @@
 # Selection Lattice: Paginated Multi-Group Selection & Min-Byte AIP-160 Filter Synthesis
 
+> **Live Demo**: [https://joeycumines.github.io/paginated-group-selection-component/](https://joeycumines.github.io/paginated-group-selection-component/)
+
 **Selection Lattice** is a reference implementation and interactive workbench for managing multi-group item selection under partial information. It pairs a virtualized React UI with a zero-dependency TypeScript selection engine (`SelectionEngine`) that maintains exact selection state across unfetched server rows, tracks per-group item counts across overlapping groups, and compiles the user's selection into a byte-minimal [Google AIP-160](https://google.aip.dev/160) filter expression.
 
 ---
@@ -308,6 +310,11 @@ The interactive demo (`src/App.tsx` and `src/components/`) is structured around 
 ---
 
 ## Getting started and verification
+
+### Live interactive workbench
+
+The reference implementation and interactive workbench is deployed live on GitHub Pages:
+[https://joeycumines.github.io/paginated-group-selection-component/](https://joeycumines.github.io/paginated-group-selection-component/)
 
 ### Prerequisites
 
